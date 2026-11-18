@@ -1,0 +1,5 @@
+.build/
+Seer.app/
+.swiftpm/
+xcuserdata/
+.DS_Store

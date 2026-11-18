@@ -1,0 +1,34 @@
+# Syntax-highlighting grammars bundled into Seer.app by scripts/grammars.sh.
+# Revisions follow nvim-treesitter's parsers.lua at the queries commit below.
+#
+# queries <repo> <revision> <extra query-only languages (inherited bases)...>
+queries nvim-treesitter/nvim-treesitter 0195cd62fa89950f34c0e0d648ea7897ab85d4d3 ecma jsx html_tags
+#
+# <name> <repo> <revision> [subdirectory]
+go tree-sitter/tree-sitter-go 2346a3ab1bb3857b48b29d779a1ef9799a248cd7
+typescript tree-sitter/tree-sitter-typescript 75b3874edb2dc714fb1fd77a32013d0f8699989f typescript
+tsx tree-sitter/tree-sitter-typescript 75b3874edb2dc714fb1fd77a32013d0f8699989f tsx
+javascript tree-sitter/tree-sitter-javascript 58404d8cf191d69f2674a8fd507bd5776f46cb11
+python tree-sitter/tree-sitter-python v0.25.0
+ruby tree-sitter/tree-sitter-ruby ad907a69da0c8a4f7a943a7fe012712208da6dee
+lua tree-sitter-grammars/tree-sitter-lua 10fe0054734eec83049514ea2e718b2a56acd0c9
+bash tree-sitter/tree-sitter-bash a06c2e4415e9bc0346c6b86d401879ffb44058f7
+zsh georgeharker/tree-sitter-zsh 7a593401efb5418ffdedbe3c0e4c61c6d240166d
+json tree-sitter/tree-sitter-json 254c42a6476413b776221e03982ac8ae159eeb72
+yaml tree-sitter-grammars/tree-sitter-yaml a1c4812a73ec5e089de8e441fdea3a921e8d5079
+toml tree-sitter-grammars/tree-sitter-toml 64b56832c2cffe41758f28e05c756a3a98d16f41
+css tree-sitter/tree-sitter-css dda5cfc5722c429eaba1c910ca32c2c0c5bb1a3f
+html tree-sitter/tree-sitter-html 73a3947324f6efddf9e17c0ea58d454843590cc0
+xml tree-sitter-grammars/tree-sitter-xml 5000ae8f22d11fbe93939b05c1e37cf21117162d xml
+sql derekstride/tree-sitter-sql 174cebb880f10bc7c5a24aa289431949d26d3c09
+vue tree-sitter-grammars/tree-sitter-vue ce8011a414fdf8091f4e4071752efc376f4afb08
+markdown tree-sitter-grammars/tree-sitter-markdown 41ff24a6c775492c543b09228aeb98d1cd2b3a0f tree-sitter-markdown
+vim tree-sitter-grammars/tree-sitter-vim 039c8d0aa1deae00ddeb0374dd70bcc0ec56938d
+powershell airbus-cert/tree-sitter-powershell 65ea6919e816a7ac142acec7ee72757f89db8439
+dockerfile camdencheek/tree-sitter-dockerfile 971acdd908568b4531b0ba28a445bf0bb720aba5
+gomod camdencheek/tree-sitter-go-mod 2e886870578eeba1927a2dc4bd2e2b3f598c5f9a
+gosum tree-sitter-grammars/tree-sitter-go-sum 27816eb6b7315746ae9fcf711e4e1396dc1cf237
+gowork omertuc/tree-sitter-go-work 949a8a470559543857a62102c84700d291fc984c
+gitignore shunsambongi/tree-sitter-gitignore f4685bf11ac466dd278449bcfe5fd014e94aa504
+gitattributes tree-sitter-grammars/tree-sitter-gitattributes 1b7af09d45b579f9f288453b95ad555f1f431645
+editorconfig ValdezFOmar/tree-sitter-editorconfig v2.0.0
