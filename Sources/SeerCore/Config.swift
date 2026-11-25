@@ -38,6 +38,12 @@ public struct AppSettings: Codable, Sendable, Equatable {
     public var uiFontSize = 13.0
     public var lineSpacing = 6.0
     public var copilotModel = "auto"
+    /// gh account to use (`gh auth token --user`); empty = `GITHUB_TOKEN`, else gh's active account.
+    public var account = ""
+    /// A `Terminal` raw value.
+    public var terminal = Terminal.ghostty.rawValue
+    /// Directory holding the clones as `<sourceDir>/<repo name>`.
+    public var sourceDir = "~/source"
 
     public init() {}
 
@@ -48,6 +54,9 @@ public struct AppSettings: Codable, Sendable, Equatable {
         uiFontSize = try c.decodeIfPresent(Double.self, forKey: .uiFontSize) ?? uiFontSize
         lineSpacing = try c.decodeIfPresent(Double.self, forKey: .lineSpacing) ?? lineSpacing
         copilotModel = try c.decodeIfPresent(String.self, forKey: .copilotModel) ?? copilotModel
+        account = try c.decodeIfPresent(String.self, forKey: .account) ?? account
+        terminal = try c.decodeIfPresent(String.self, forKey: .terminal) ?? terminal
+        sourceDir = try c.decodeIfPresent(String.self, forKey: .sourceDir) ?? sourceDir
     }
 }
 

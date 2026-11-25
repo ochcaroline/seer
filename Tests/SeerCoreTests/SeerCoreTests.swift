@@ -156,6 +156,7 @@ index 6666666..0000000
         #expect(run("gj") == [])
         #expect(run("]f[f") == [.nextFile, .prevFile])
         #expect(run(" ai") == [.ai])
+        #expect(run(" d") == [.description])
     }
 
     @Test func visual() {
@@ -269,9 +270,35 @@ let useBuiltGrammars: Void = {
     }
 }
 
+@Suite struct TerminalTests {
+    let repo = Repo(owner: "o", name: "my.repo")
+
+    @Test func sessionNameIsTmuxSafe() { #expect(Terminal.sessionName(repo, 7) == "seer-my_repo-7") }
+
+    @Test func scriptQuotesPaths() {
+        let s = Terminal.script(dir: "/a b/it's", repo: repo, number: 7)
+        #expect(s.hasPrefix(#"cd '/a b/it'\''s' && gh pr checkout 7 -R 'o/my.repo'"#))
+        #expect(s.contains("exec tmux attach -t '=seer-my_repo-7'"))
+    }
+
+    @Test func commandsPerTerminal() {
+        #expect(Terminal.ghostty.command(shell: "/bin/zsh", script: "x").args == ["-na", "Ghostty", "--args", "-e", "/bin/zsh", "-lc", "x"])
+        #expect(Terminal.kitty.command(shell: "/bin/zsh", script: "x").args.suffix(3) == ["/bin/zsh", "-lc", "x"])
+        #expect(Terminal.terminal.command(shell: "/bin/zsh", script: "a\"b").args.last!.contains(#"a\"b"#))
+    }
+}
+
+@Suite struct GhAccountsTests {
+    @Test func parsesGithubComLogins() {
+        let json = #"{"hosts":{"github.com":[{"login":"a","active":true},{"login":"b","active":false}],"ghe.x":[{"login":"c"}]}}"#
+        #expect(GitHub.parseAccounts(Data(json.utf8)) == ["a", "b"])
+        #expect(GitHub.parseAccounts(Data("nope".utf8)).isEmpty)
+    }
+}
+
 @MainActor @Suite struct ReviewSessionTests {
     func detail(head: String = "new", pending: String? = nil, pendingCommit: String? = nil) -> PRDetail {
-        PRDetail(id: "PR1", title: "t", url: "u", headSha: head, mergeable: "MERGEABLE", reviewDecision: nil, autoMerge: nil,
+        PRDetail(id: "PR1", title: "t", body: "", url: "u", headSha: head, mergeable: "MERGEABLE", behindBy: 0, reviewDecision: nil, autoMerge: nil,
                  headOwner: "o", commitHeadlines: [], commitBodies: [], commitCount: 1, checks: [], threads: [],
                  pendingReviewId: pending, pendingReviewCommit: pendingCommit, viewer: "me")
     }
@@ -340,4 +367,16 @@ let useBuiltGrammars: Void = {
     #expect(relativeAge("2026-07-18T12:00:00Z", now: now) == "4mo")
     #expect(relativeAge("2024-11-18T12:00:00Z", now: now) == "2y")
     #expect(relativeAge("nonsense", now: now) == "")
+}
+
+@Test func fileTreeMergesSingleChildFolders() {
+    let rows = fileTree(["packages/app/src/a.ts", "packages/app/src/lib/b.ts", "packages/app/src/lib/c.ts", "README.md"])
+    #expect(rows == [
+        TreeRow(depth: 0, name: "packages/app/src/", file: nil),
+        TreeRow(depth: 1, name: "lib/", file: nil),
+        TreeRow(depth: 2, name: "b.ts", file: 1),
+        TreeRow(depth: 2, name: "c.ts", file: 2),
+        TreeRow(depth: 1, name: "a.ts", file: 0),
+        TreeRow(depth: 0, name: "README.md", file: 3),
+    ])
 }

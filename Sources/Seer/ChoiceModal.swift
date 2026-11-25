@@ -12,12 +12,11 @@ struct ChoiceConfig {
     struct Mode {
         let id: String
         let name: String
-        var key: Character?
     }
 
     let title: String
     let modes: [Mode]
-    /// j/k move the selection (otherwise each mode has its own key).
+    /// j/k move the selection.
     let navigate: Bool
     let pickHint: String
     let idleHint: String
@@ -27,10 +26,10 @@ struct ChoiceConfig {
 
     static let submit = ChoiceConfig(
         title: "Submit review",
-        modes: [.init(id: "APPROVE", name: "Approve", key: "a"), .init(id: "REQUEST_CHANGES", name: "Request changes", key: "r"),
-                .init(id: "COMMENT", name: "Comment", key: "c")],
-        navigate: false, pickHint: "Pick a mode first: a, r or c",
-        idleHint: "a/r/c mode · i edit comment (optional) · Enter submit · Esc discard",
+        modes: [.init(id: "APPROVE", name: "Approve"), .init(id: "REQUEST_CHANGES", name: "Request changes"),
+                .init(id: "COMMENT", name: "Comment")],
+        navigate: true, pickHint: "Pick a mode first: j or k",
+        idleHint: "j/k mode · i edit comment (optional) · Enter submit · Esc discard",
         editHint: "Editing comment · Esc stop editing")
 
     static let close = ChoiceConfig(
@@ -162,7 +161,7 @@ final class ChoiceModal: NSView {
         for (i, m) in config.modes.enumerated() {
             let on = i == mode
             t.ui(on ? "● " : "○ ", on ? Theme.accent : Theme.dim)
-            t.ui((m.key.map { "(\($0)) " } ?? "") + m.name + (i < config.modes.count - 1 ? "\n" : ""),
+            t.ui(m.name + (i < config.modes.count - 1 ? "\n" : ""),
                  on ? Theme.text : Theme.dim, bold: on)
         }
         modeLabel.attributedStringValue = t
@@ -184,7 +183,6 @@ final class ChoiceModal: NSView {
             if let mode, let why = config.locked[config.modes[mode].id] { return warn(why) }
             return setEditing(true)
         }
-        if let i = config.modes.firstIndex(where: { $0.key == c }) { return pick(i) }
         guard config.navigate else { return }
         if c == "j" { pick(min((mode ?? -1) + 1, config.modes.count - 1)) }
         if c == "k" { pick(max((mode ?? config.modes.count) - 1, 0)) }

@@ -50,10 +50,16 @@ final class AppController: NSObject, NSApplicationDelegate {
     private let files = ListView()
     private let diffView = DiffView()
     private let help = HelpView()
+    private var descriptionView: DescriptionView?
     private let submitModal = ChoiceModal(.submit)
     private let mergeModal = ChoiceModal(.merge)
     private let closeModal = ChoiceModal(.close)
+    private var ghAccount = ""
+    private var refreshing = Set<String>()
+    private static let spinnerFrames = Array("⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏")
     private var checksOffset = 0
+    /// Diff file index for each row of `files` (nil for folder rows).
+    private var fileOfRow: [Int?] = []
     private let aiDrawer = AIDrawerView()
     private var copilotRunner: CopilotRunner?
     private var copilotTask: Task<Void, Never>?
@@ -119,9 +125,10 @@ final class AppController: NSObject, NSApplicationDelegate {
             }
             return setStatus("No repos configured")
         }
-        if gh == nil {
+        if gh == nil || ghAccount != Settings.account {
             do {
-                gh = GitHub(token: try GitHub.loadToken())
+                gh = GitHub(token: try GitHub.loadToken(account: Settings.account))
+                ghAccount = Settings.account
             } catch {
                 return showError("\(error)")
             }
@@ -216,9 +223,8 @@ final class AppController: NSObject, NSApplicationDelegate {
         prList.onCommand = { [weak self] cmd in
             guard let self else { return false }
             switch cmd {
-            case .refresh: refresh()
-            case .other("R"):
-                refresh(clearList: true)
+            case .refresh: refreshSelected()
+            case .other("R"): refresh()
             case .other("/"): beginSearch()
             case .escape where !search.stringValue.isEmpty: endSearch(clear: true)
             case .open: if let pr = listItems[safe: prList.cursor] ?? nil { openURL(pr.url) }
@@ -230,6 +236,7 @@ final class AppController: NSObject, NSApplicationDelegate {
                 let target = cmd == .other("l") ? starts.first { $0 > cur } : starts.last { $0 < cur }
                 if let target { prList.setCursor(target) } else { return false }
             case .checkout: if let pr = listItems[safe: prList.cursor] ?? nil { copyCheckout(pr) }
+            case .terminal: if let pr = listItems[safe: prList.cursor] ?? nil { openInTerminal(pr) }
             case .other(","): openSettings()
             case .other("?"): showHelp()
             default: return false
@@ -248,7 +255,8 @@ final class AppController: NSObject, NSApplicationDelegate {
         }
         files.onEnter = { [weak self] i in
             guard let self else { return }
-            diffView.scrollToFile(i, firstLine: true)
+            guard let fi = fileOfRow[i] else { return }
+            diffView.scrollToFile(fi, firstLine: true)
             window.makeFirstResponder(diffView)
         }
         files.onCommand = { [weak self] cmd in self?.prCommand(cmd) ?? false }
@@ -400,6 +408,29 @@ final class AppController: NSObject, NSApplicationDelegate {
         window.makeFirstResponder(help)
     }
 
+    private func showDescription() {
+        guard descriptionView == nil, let d = detail else { return }
+        let previous = window.firstResponder as? NSView
+        let v = DescriptionView(title: "#\(current?.number ?? 0)  \(d.title)", body: d.body)
+        v.onClose = { [weak self, weak previous] in
+            guard let self else { return }
+            descriptionView?.removeFromSuperview()
+            descriptionView = nil
+            window.makeFirstResponder(previous ?? diffView)
+        }
+        descriptionView = v
+        v.translatesAutoresizingMaskIntoConstraints = false
+        container.addSubview(v)
+        NSLayoutConstraint.activate([
+            v.topAnchor.constraint(equalTo: container.topAnchor),
+            v.bottomAnchor.constraint(equalTo: container.bottomAnchor),
+            v.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+            v.trailingAnchor.constraint(equalTo: container.trailingAnchor),
+        ])
+        container.layoutSubtreeIfNeeded()
+        window.makeFirstResponder(v.focusTarget)
+    }
+
     private func closeHelp(previous: NSView? = nil) {
         guard help.superview != nil else { return }
         help.removeFromSuperview()
@@ -407,7 +438,7 @@ final class AppController: NSObject, NSApplicationDelegate {
     }
 
     private func aiContext() -> (label: String, text: String) {
-        aiSource === files ? diffView.aiContext(file: files.cursor) : diffView.aiContext()
+        aiSource === files ? diffView.aiContext(file: fileOfRow[safe: files.cursor] ?? nil) : diffView.aiContext()
     }
 
     private func showAIDrawer() {
@@ -516,10 +547,11 @@ final class AppController: NSObject, NSApplicationDelegate {
 
     private func tickBusy() {
         guard let t = busyText else { return }
-        let frames = Array("⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏")
+        let frames = Self.spinnerFrames
         status.stringValue = "\(frames[busyTick % frames.count]) \(t)" + String(repeating: ".", count: (busyTick / 4) % 4)
         status.textColor = Theme.accent
         busyTick += 1
+        if !refreshing.isEmpty, let lastList { render(lastList) }
     }
 
     private func copyCheckout(_ pr: PRSummary) {
@@ -527,6 +559,25 @@ final class AppController: NSObject, NSApplicationDelegate {
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(cmd, forType: .string)
         setStatus("Copied: \(cmd)")
+    }
+
+    private func openInTerminal(_ pr: PRSummary) {
+        let dir = ((Settings.sourceDir as NSString).expandingTildeInPath as NSString).appendingPathComponent(pr.repo.name)
+        var isDir: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: dir, isDirectory: &isDir), isDir.boolValue else {
+            return setStatus("No clone at \(dir). Set the source directory in Settings.", error: true)
+        }
+        let shell = ProcessInfo.processInfo.environment["SHELL"] ?? "/bin/zsh"
+        let (exe, args) = Settings.terminal.command(shell: shell, script: Terminal.script(dir: dir, repo: pr.repo, number: pr.number))
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: exe)
+        p.arguments = args
+        do {
+            try p.run()
+            setStatus("Opened \(Terminal.sessionName(pr.repo, pr.number)) in \(Settings.terminal.rawValue)")
+        } catch {
+            setStatus("Could not start \(Settings.terminal.rawValue): \(error.localizedDescription)", error: true)
+        }
     }
 
     /// Only https: check URLs come from third-party CI and could otherwise launch local apps or URL handlers.
@@ -573,12 +624,41 @@ final class AppController: NSObject, NSApplicationDelegate {
         }
     }
 
-    private func refresh(label: String = "Refreshing PRs", clearList: Bool = false) {
-        guard let gh, let config else { return }
-        if clearList {
-            listItems = []
-            prList.rows = []
+    private func refreshSelected() {
+        guard let pr = listItems[safe: prList.cursor] ?? nil, !refreshing.contains(key(pr)) else { return }
+        let busy = setBusy("Refreshing #\(pr.number)")
+        entries[key(pr)] = nil
+        lru.removeAll { $0 == key(pr) }
+        Task {
+            do {
+                let fresh = try await freshSummary(pr)
+                if let fresh { _ = entry(fresh) }
+                endBusy(busy, fresh == nil ? "#\(pr.number) is no longer open" : "Updated #\(pr.number)")
+            } catch {
+                setStatus("\(error)", error: true)
+            }
         }
+    }
+
+    /// Fetches `pr` again and swaps it into the list and its cache; nil when it is no longer open.
+    private func freshSummary(_ pr: PRSummary) async throws -> PRSummary? {
+        guard let gh else { return pr }
+        refreshing.insert(key(pr))
+        defer {
+            refreshing.remove(key(pr))
+            if let lastList { render(lastList) }
+        }
+        let fresh = try await gh.refreshPR(pr, viewer: lastList?.viewer ?? detail?.viewer ?? "")
+        if let list = lastList {
+            let updated = list.replacing(pr, with: fresh)
+            PRCache.save(updated)
+            lastList = updated
+        }
+        return fresh
+    }
+
+    private func refresh(label: String = "Refreshing PRs") {
+        guard let gh, let config else { return }
         let busy = setBusy(label)
         Task {
             do {
@@ -640,7 +720,9 @@ final class AppController: NSObject, NSApplicationDelegate {
                 items.append(nil)
             }
             for (pr, depth) in stacked(prs) {
-                let s = NSMutableAttributedString().ui("  " + String(repeating: "   ", count: depth) + (depth > 0 ? "↳ " : ""))
+                let spin = refreshing.contains(key(pr)) ? String(Self.spinnerFrames[busyTick % Self.spinnerFrames.count]) : " "
+                let s = NSMutableAttributedString().ui(spin, Theme.accent)
+                    .ui(" " + String(repeating: "   ", count: depth) + (depth > 0 ? "↳ " : ""))
                 if pr.reviewRequested { s.pill("REVIEW", Theme.yellow).ui(" ") }
                 if pr.isApproved && !pr.isDraft && !pr.reviewRequested { s.pill("APPROVED", Theme.green).ui(" ") }
                 if pr.isDraft { s.pill("DRAFT", Theme.dim).ui(" ") }
@@ -720,12 +802,22 @@ final class AppController: NSObject, NSApplicationDelegate {
         return e
     }
 
+    /// A reload first fetches the PR summary again, so the header (line counts, title) isn't the list's stale copy.
     private func open(_ pr: PRSummary, reload: Bool = false) {
-        if reload {
-            let cacheKey = key(pr)
-            entries[cacheKey] = nil
-            lru.removeAll { $0 == cacheKey }
+        guard reload else { return load(pr, reload: false) }
+        let cacheKey = key(pr)
+        entries[cacheKey] = nil
+        lru.removeAll { $0 == cacheKey }
+        current = pr
+        let busy = setBusy("Reloading #\(pr.number)")
+        Task {
+            let fresh = (try? await freshSummary(pr)) ?? pr
+            guard current == pr else { return endBusy(busy, "") }
+            load(fresh, reload: true)
         }
+    }
+
+    private func load(_ pr: PRSummary, reload: Bool) {
         guard let e = entry(pr) else { return }
         current = pr
         let busy = setBusy(reload ? "Reloading #\(pr.number)" : "Loading #\(pr.number)")
@@ -847,6 +939,10 @@ final class AppController: NSObject, NSApplicationDelegate {
         }
         rows.append(ListRow(text: NSMutableAttributedString().pill(d.mergeable, mergeColor).ui("  ")
             .pill(review.replacingOccurrences(of: "_", with: " "), reviewColor), selectable: false))
+        if d.behindBy > 0 {
+            rows.append(ListRow(text: NSMutableAttributedString().ui("⚠ \(d.behindBy) commit\(d.behindBy == 1 ? "" : "s") behind \(current?.baseRef ?? "base") · needs update", Theme.yellow, bold: true),
+                                selectable: false))
+        }
         if let auto = d.autoMerge {
             rows.append(ListRow(text: NSMutableAttributedString().ui("⟳ AUTO-MERGE ENABLED · \(auto)", Theme.orange, bold: true),
                                 selectable: false, background: Theme.orange.withAlphaComponent(0.15)))
@@ -869,14 +965,17 @@ final class AppController: NSObject, NSApplicationDelegate {
 
     private func renderFiles() {
         let counts = Dictionary(diffView.threads.map { ($0.path, $0.comments.count) }, uniquingKeysWith: +)
-        let p = NSMutableParagraphStyle()
-        p.lineBreakMode = .byTruncatingHead
         let fs = diffView.diff.files
-        files.rows = fs.map { f in
-            let s = NSMutableAttributedString().ui(f.path).ui("  +\(f.adds)", Theme.green).ui(" −\(f.dels)", Theme.red)
-                .ui(counts[f.path].map { "  \($0)" } ?? "", Theme.yellow)
-            s.addAttribute(.paragraphStyle, value: p, range: NSRange(location: 0, length: s.length))
-            return ListRow(text: s)
+        let tree = fileTree(fs.map(\.path))
+        fileOfRow = tree.map(\.file)
+        files.rows = tree.map { t in
+            let indent = String(repeating: "  ", count: t.depth)
+            guard let i = t.file else {
+                return ListRow(text: NSMutableAttributedString().ui(indent + t.name, Theme.dim), selectable: false)
+            }
+            let f = fs[i]
+            return ListRow(text: NSMutableAttributedString().ui(indent + t.name).ui("  +\(f.adds)", Theme.green).ui(" −\(f.dels)", Theme.red)
+                .ui(counts[f.path].map { "  \($0)" } ?? "", Theme.yellow))
         }
         filesHeader.title = NSMutableAttributedString().ui("FILES", Theme.dim, bold: true).ui("   \(fs.count)", Theme.text)
             .ui("   +\(fs.reduce(0) { $0 + $1.adds })", Theme.green).ui(" −\(fs.reduce(0) { $0 + $1.dels })", Theme.red)
@@ -898,8 +997,12 @@ final class AppController: NSObject, NSApplicationDelegate {
             beginSubmit()
         case .merge:
             beginMerge()
+        case .description:
+            showDescription()
         case .checkout:
             if let pr = current { copyCheckout(pr) }
+        case .terminal:
+            if let pr = current { openInTerminal(pr) }
         case .other("X"):
             beginClose()
         case .other(","):

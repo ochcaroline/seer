@@ -41,6 +41,12 @@ public struct PRList: Codable, Sendable {
     /// Repos GitHub returned no data for (renamed, deleted or no access); `warnings` says why.
     public let unavailable: [Repo]
     public let warnings: [String]
+
+    /// This list with `old` swapped for `new`, or dropped when `new` is nil.
+    public func replacing(_ old: PRSummary, with new: PRSummary?) -> PRList {
+        let prs = self.prs.compactMap { $0 == old ? new : $0 }
+        return PRList(viewer: viewer, prs: prs, unavailable: unavailable, warnings: warnings)
+    }
 }
 
 /// Diff side of a review comment.
@@ -135,10 +141,13 @@ public struct ReviewThread: Sendable {
 public struct PRDetail: Sendable {
     public let id: String
     public let title: String
+    public let body: String
     public let url: String
     /// Head commit the loaded diff and threads belong to.
     public let headSha: String
     public let mergeable: String
+    /// Commits on the base branch that the PR head lacks (0 = up to date).
+    public let behindBy: Int
     public let reviewDecision: String?
     /// Merge method and enabler when auto-merge is on, e.g. "SQUASH by @bob".
     public let autoMerge: String?
@@ -194,25 +203,42 @@ public struct GitHub: Sendable {
 
     public init(token: String) { self.token = token }
 
-    /// `GITHUB_TOKEN`, else `gh auth token`. GUI apps don't inherit the shell PATH, so common gh locations are tried.
-    public static func loadToken(env: [String: String] = ProcessInfo.processInfo.environment) throws -> String {
-        if let t = env["GITHUB_TOKEN"], !t.isEmpty { return t }
+    /// `gh auth token --user account` when `account` is set, else `GITHUB_TOKEN`, else gh's active account.
+    public static func loadToken(account: String = "", env: [String: String] = ProcessInfo.processInfo.environment) throws -> String {
+        if account.isEmpty, let t = env["GITHUB_TOKEN"], !t.isEmpty { return t }
+        let (status, data) = try runGh(["auth", "token"] + (account.isEmpty ? [] : ["--user", account]), env: env)
+        let token = String(decoding: data, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
+        guard status == 0, !token.isEmpty else { throw GitHubError.noToken("`gh auth token\(account.isEmpty ? "" : " --user \(account)")` failed") }
+        return token
+    }
+
+    /// Logins gh knows for github.com, from `gh auth status --json hosts`; empty when gh is missing or too old for `--json`.
+    public static func ghAccounts(env: [String: String] = ProcessInfo.processInfo.environment) -> [String] {
+        guard let (_, data) = try? runGh(["auth", "status", "--json", "hosts"], env: env) else { return [] }
+        return parseAccounts(data)
+    }
+
+    static func parseAccounts(_ data: Data) -> [String] {
+        struct Out: Decodable { struct A: Decodable { let login: String }; let hosts: [String: [A]] }
+        return (try? JSONDecoder().decode(Out.self, from: data))?.hosts["github.com"]?.map(\.login) ?? []
+    }
+
+    /// GUI apps don't inherit the shell PATH, so common gh locations are tried.
+    private static func runGh(_ args: [String], env: [String: String]) throws -> (Int32, Data) {
         let dirs = ["/opt/homebrew/bin", "/usr/local/bin"] + (env["PATH"] ?? "").split(separator: ":").map(String.init)
         guard let gh = dirs.map({ $0 + "/gh" }).first(where: FileManager.default.isExecutableFile) else {
             throw GitHubError.noToken("gh not found")
         }
         let p = Process()
         p.executableURL = URL(fileURLWithPath: gh)
-        p.arguments = ["auth", "token"]
+        p.arguments = args
         let out = Pipe()
         p.standardOutput = out
         p.standardError = Pipe()
         try p.run()
         let data = out.fileHandleForReading.readDataToEndOfFile()
         p.waitUntilExit()
-        let token = String(decoding: data, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
-        guard p.terminationStatus == 0, !token.isEmpty else { throw GitHubError.noToken("`gh auth token` failed") }
-        return token
+        return (p.terminationStatus, data)
     }
 
     private func send(_ req: URLRequest) async throws -> Data {
@@ -267,14 +293,42 @@ public struct GitHub: Sendable {
         return out
     }
 
-    public func listPRs(_ repos: [Repo]) async throws -> PRList {
-        struct RawPR: Decodable {
-            struct RR: Decodable { struct R: Decodable { let login: String?; let slug: String?; let organization: Login? }; let requestedReviewer: R? }
-            let number: Int, title: String, url: String, isDraft: Bool, createdAt: String, updatedAt: String, headRefOid: String, reviewDecision: String?, headRefName: String, baseRefName: String
-            let author: Login?
-            let additions: Int, deletions: Int
-            let reviewRequests: Nodes<RR>
+    private struct RawPR: Decodable {
+        struct RR: Decodable { struct R: Decodable { let login: String?; let slug: String?; let organization: Login? }; let requestedReviewer: R? }
+        let state: String, number: Int, title: String, url: String, isDraft: Bool, createdAt: String, updatedAt: String, headRefOid: String, reviewDecision: String?, headRefName: String, baseRefName: String
+        let author: Login?
+        let additions: Int, deletions: Int
+        let reviewRequests: Nodes<RR>
+
+        static let fields = """
+        state number title url isDraft createdAt updatedAt headRefOid reviewDecision headRefName baseRefName author { login } additions deletions
+        reviewRequests(first: 20) { nodes { requestedReviewer { ... on User { login } ... on Team { slug organization { login } } } } }
+        """
+
+        func summary(_ repo: Repo, viewer: String, myTeams: Set<String>) -> PRSummary {
+            let requested = reviewRequests.nodes.contains {
+                guard let r = $0?.requestedReviewer else { return false }
+                if let slug = r.slug, let org = r.organization?.login { return myTeams.contains("\(org)/\(slug)".lowercased()) }
+                return r.login == viewer
+            }
+            return PRSummary(repo: repo, number: number, title: title, url: url,
+                             author: author?.login ?? "ghost", isDraft: isDraft, createdAt: createdAt, updatedAt: updatedAt, headSha: headRefOid, isApproved: reviewDecision == "APPROVED", changesRequested: reviewDecision == "CHANGES_REQUESTED",
+                             headRef: headRefName, baseRef: baseRefName,
+                             reviewRequested: requested, additions: additions, deletions: deletions)
         }
+    }
+
+    /// Fresh summary of one PR, or nil when it is no longer open.
+    public func refreshPR(_ pr: PRSummary, viewer: String) async throws -> PRSummary? {
+        struct Data: Decodable { struct R: Decodable { let pullRequest: RawPR }; let repository: R }
+        let q = "query($o: String!, $n: String!, $num: Int!) { repository(owner: $o, name: $n) { pullRequest(number: $num) { \(RawPR.fields) } } }"
+        let vars: [String: GQLValue] = ["o": .string(pr.repo.owner), "n": .string(pr.repo.name), "num": .int(pr.number)]
+        let raw = try await graphQL(q, vars, as: Data.self).repository.pullRequest
+        guard raw.state == "OPEN" else { return nil }
+        return raw.summary(pr.repo, viewer: viewer, myTeams: await teams(of: viewer, owners: [pr.repo.owner]))
+    }
+
+    public func listPRs(_ repos: [Repo]) async throws -> PRList {
         struct RawRepo: Decodable { let pullRequests: Nodes<RawPR> }
         struct Data: Decodable {
             let viewer: String
@@ -292,8 +346,7 @@ public struct GitHub: Sendable {
             """
             r\(i): repository(owner: "\(r.owner)", name: "\(r.name)") {
               pullRequests(states: OPEN, first: 50, orderBy: {field: UPDATED_AT, direction: DESC}) {
-                nodes { number title url isDraft createdAt updatedAt headRefOid reviewDecision headRefName baseRefName author { login } additions deletions
-                  reviewRequests(first: 20) { nodes { requestedReviewer { ... on User { login } ... on Team { slug organization { login } } } } } }
+                nodes { \(RawPR.fields) }
               }
             }
             """
@@ -308,15 +361,7 @@ public struct GitHub: Sendable {
                 continue
             }
             for case let pr? in raw.pullRequests.nodes {
-                let requested = pr.reviewRequests.nodes.contains {
-                    guard let r = $0?.requestedReviewer else { return false }
-                    if let slug = r.slug, let org = r.organization?.login { return myTeams.contains("\(org)/\(slug)".lowercased()) }
-                    return r.login == d.viewer
-                }
-                prs.append(PRSummary(repo: repo, number: pr.number, title: pr.title, url: pr.url,
-                                     author: pr.author?.login ?? "ghost", isDraft: pr.isDraft, createdAt: pr.createdAt, updatedAt: pr.updatedAt, headSha: pr.headRefOid, isApproved: pr.reviewDecision == "APPROVED", changesRequested: pr.reviewDecision == "CHANGES_REQUESTED",
-                                     headRef: pr.headRefName, baseRef: pr.baseRefName,
-                                     reviewRequested: requested, additions: pr.additions, deletions: pr.deletions))
+                prs.append(pr.summary(repo, viewer: d.viewer, myTeams: myTeams))
             }
         }
         return PRList(viewer: d.viewer, prs: prs, unavailable: unavailable, warnings: warnings)
@@ -331,7 +376,7 @@ public struct GitHub: Sendable {
             let repository: R
         }
         let q = "query($o: String!, $n: String!, $num: Int!) { repository(owner: $o, name: $n) { pullRequest(number: $num) { headRefOid } } }"
-        return try await graphQL(q, ["o": .string(pr.repo.owner), "n": .string(pr.repo.name), "num": .int(pr.number)],
+        return try await graphQL(q, ["o": .string(pr.repo.owner), "n": .string(pr.repo.name), "num": .int(pr.number), "sha": .string(pr.headSha)],
                                  as: D.self).repository.pullRequest.headRefOid
     }
 
@@ -357,9 +402,11 @@ public struct GitHub: Sendable {
         }
         struct Review: Decodable { struct C: Decodable { let oid: String }; let id: String; let author: Login?; let commit: C? }
         struct PR: Decodable {
-            let id: String, title: String, url: String, headRefOid: String, mergeable: String, reviewDecision: String?
+            let id: String, title: String, body: String, url: String, headRefOid: String, mergeable: String, reviewDecision: String?
             struct Auto: Decodable { let mergeMethod: String; let enabledBy: Login? }
             let autoMergeRequest: Auto?
+            struct Base: Decodable { struct Cmp: Decodable { let behindBy: Int }; let compare: Cmp? }
+            let baseRef: Base?
             let headRepositoryOwner: Login?
             struct Msg: Decodable { struct C: Decodable { let messageHeadline: String; let messageBody: String }; let commit: C }
             struct All: Decodable { let totalCount: Int; let nodes: [Msg?] }
@@ -371,11 +418,12 @@ public struct GitHub: Sendable {
         struct Repo: Decodable { let pullRequest: PR }
         struct Data: Decodable { let viewer: Login; let repository: Repo }
         let q = """
-        query($o: String!, $n: String!, $num: Int!) {
+        query($o: String!, $n: String!, $num: Int!, $sha: String!) {
           viewer { login }
           repository(owner: $o, name: $n) { pullRequest(number: $num) {
-            id title url headRefOid mergeable reviewDecision
+            id title body url headRefOid mergeable reviewDecision
             autoMergeRequest { mergeMethod enabledBy { login } }
+            baseRef { compare(headRef: $sha) { behindBy } }
             headRepositoryOwner { login }
             allCommits: commits(first: 100) { totalCount nodes { commit { messageHeadline messageBody } } }
             commits(last: 1) { nodes { commit { statusCheckRollup { contexts(first: 100) { nodes {
@@ -389,7 +437,7 @@ public struct GitHub: Sendable {
           } }
         }
         """
-        let d = try await graphQL(q, ["o": .string(pr.repo.owner), "n": .string(pr.repo.name), "num": .int(pr.number)],
+        let d = try await graphQL(q, ["o": .string(pr.repo.owner), "n": .string(pr.repo.name), "num": .int(pr.number), "sha": .string(pr.headSha)],
                                   as: Data.self)
         let p = d.repository.pullRequest
         let viewer = d.viewer.login ?? ""
@@ -412,7 +460,7 @@ public struct GitHub: Sendable {
                                 } })
         }
         let pending = p.reviews.nodes.first { $0?.author?.login == viewer } ?? nil
-        return PRDetail(id: p.id, title: p.title, url: p.url, headSha: p.headRefOid, mergeable: p.mergeable,
+        return PRDetail(id: p.id, title: p.title, body: p.body, url: p.url, headSha: p.headRefOid, mergeable: p.mergeable, behindBy: p.baseRef?.compare?.behindBy ?? 0,
                         reviewDecision: p.reviewDecision,
                         autoMerge: p.autoMergeRequest.map { "\($0.mergeMethod)" + ($0.enabledBy?.login.map { " by @\($0)" } ?? "") },
                         headOwner: p.headRepositoryOwner?.login ?? pr.repo.owner,

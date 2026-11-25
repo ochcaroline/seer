@@ -8,7 +8,7 @@ private final class PromptView: BlockCursorTextView {
         super.draw(dirty)
         guard string.isEmpty else { return }
         let origin = NSPoint(x: textContainerInset.width + (textContainer?.lineFragmentPadding ?? 0), y: textContainerInset.height)
-        placeholder.draw(at: origin, withAttributes: [.font: Theme.uiFont, .foregroundColor: Theme.dim])
+        placeholder.draw(at: origin, withAttributes: [.font: font ?? Theme.uiFont, .foregroundColor: Theme.dim])
     }
 }
 
@@ -166,7 +166,7 @@ private final class ResponseView: NSView {
 }
 
 /// Vim-style pane: normal mode moves a line cursor (j/k, Ctrl-d/u, V/y to copy), `i` types a prompt right under the response, Esc returns to normal mode.
-/// Enter sends, Shift+Enter adds a line (up to `maxLines` visible, then scrolls).
+/// Enter in normal mode sends; Enter in the prompt adds a line (up to `maxLines` visible, then scrolls).
 final class AIDrawerView: NSView, NSTextViewDelegate {
     var onSubmit: ((String) -> Void)?
     var onClose: (() -> Void)?
@@ -193,7 +193,9 @@ final class AIDrawerView: NSView, NSTextViewDelegate {
             input.needsDisplay = true
         }
     }
-    private static let idlePlaceholder = "Ask Copilot about this PR…  (Shift+Enter for a new line)"
+    /// Same font as the response text.
+    private static var promptFont: NSFont { .systemFont(ofSize: Settings.uiFontSize + 1) }
+    private static let idlePlaceholder = "Ask Copilot about this PR…  (Esc, then Enter to send)"
     var inputIsEmpty: Bool { input.string.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
 
     override var isFlipped: Bool { true }
@@ -220,7 +222,7 @@ final class AIDrawerView: NSView, NSTextViewDelegate {
             window?.makeFirstResponder(self)
         }
         input.delegate = self
-        input.font = Theme.uiFont
+        input.font = Self.promptFont
         input.textColor = Theme.text
         input.insertionPointColor = Theme.text
         input.drawsBackground = false
@@ -332,6 +334,7 @@ final class AIDrawerView: NSView, NSTextViewDelegate {
             if let msg = response.copySelection() { onStatus?(msg) }
             onModeChange?()
         case .char("q"): onClose?()
+        case .enter: submit()
         case .escape:
             if response.hasSelection || response.hasMouseSelection { response.clearSelection(); onModeChange?() } else { onCancel?() }
         default: NSSound.beep()
@@ -345,16 +348,13 @@ final class AIDrawerView: NSView, NSTextViewDelegate {
     private func updateTitle() {
         modelLabel.attributedStringValue = NSMutableAttributedString().ui("✦ ", Theme.accent).ui(Settings.copilotModel, Theme.dim)
         header.title = NSMutableAttributedString().ui("✦ Copilot", Theme.text, bold: true)
-            .ui("  \(Settings.copilotModel)", Theme.accent).ui("   i type · q close", Theme.dim)
+            .ui("  \(Settings.copilotModel)", Theme.accent).ui("   i type · Enter send · q close", Theme.dim)
     }
 
     func textView(_ textView: NSTextView, doCommandBy sel: Selector) -> Bool {
         switch sel {
         case #selector(NSResponder.cancelOperation(_:)), #selector(NSResponder.complete(_:)):
             if isBusy { onCancel?() } else { window?.makeFirstResponder(self) }
-        case #selector(NSResponder.insertNewline(_:)):
-            if NSApp.currentEvent?.modifierFlags.contains(.shift) == true { return false }
-            submit()
         default:
             return false
         }
@@ -368,7 +368,7 @@ final class AIDrawerView: NSView, NSTextViewDelegate {
     private func fitInput() {
         guard let lm = input.layoutManager, let tc = input.textContainer else { return }
         lm.ensureLayout(for: tc)
-        let line = lm.defaultLineHeight(for: Theme.uiFont)
+        let line = lm.defaultLineHeight(for: Self.promptFont)
         let lines = min(max(round(lm.usedRect(for: tc).height / line), 1), CGFloat(maxLines))
         inputBoxHeight?.constant = lines * line
         input.needsDisplay = true

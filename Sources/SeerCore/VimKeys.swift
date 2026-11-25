@@ -14,7 +14,7 @@ public enum Command: Equatable, Sendable {
     case visual, comment, submit
     case enter, escape
     case open, back, refresh
-    case ai, merge, checkout
+    case ai, merge, checkout, terminal, description
     case other(Character)
 }
 
@@ -55,7 +55,9 @@ public struct VimKeys: Sendable {
                 case (" a", "i"): return .ai
                 case (" ", "g"): pending = " g"; return nil
                 case (" g", "h"): return .checkout
+                case (" g", "t"): return .terminal
                 case (" ", "m"): return .merge
+                case (" ", "d"): return .description
                 case (" ", "s"): return .submit
                 case ("g", "g"): return .top
                 case ("]", "f"): return .nextFile

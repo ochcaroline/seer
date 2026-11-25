@@ -14,7 +14,7 @@ Native AppKit, no web view.
 
 - macOS 14+, Swift 6 toolchain (Xcode or Command Line Tools)
 - Network access when building: SwiftPM fetches the tree-sitter runtime, and `make` downloads the grammars pinned in `grammars.txt` and compiles them into the app bundle
-- GitHub access: `gh auth login` (or set `GITHUB_TOKEN`). Team review requests need the `read:org` scope.
+- GitHub access: `gh auth login` (or set `GITHUB_TOKEN`). With several `gh` accounts, set "GitHub account" in Settings to pin one (otherwise `GITHUB_TOKEN`, else the active `gh` account). Team review requests need the `read:org` scope.
 - Optional: the [Copilot CLI](https://github.com/github/copilot-cli) (`copilot login`) for the Copilot pane.
 
 ## Build
@@ -41,7 +41,7 @@ Press `?` in the app for the full list. The essentials:
 | Where | Keys |
 |---|---|
 | Everywhere | `j`/`k` move (counts: `5j`), `Ctrl-d`/`Ctrl-u` half page, `gg`/`G` first/last, `?` help, `,` settings, `o` open in browser |
-| PR list | `Enter` open, `h`/`l` previous/next repo, `/` filter, `r` refresh, `R` refresh from scratch, `Space g h` copy `gh pr checkout` |
+| PR list | `Enter` open, `h`/`l` previous/next repo, `/` filter, `r` refresh the selected PR, `R` refresh all, `Space g h` copy `gh pr checkout`, `Space g t` open in a terminal (Settings: terminal, source directory) as a tmux session with the PR checked out, nvim in the first window and a spare shell in the second |
 | Diff | `h`/`l` (or `[f`/`]f`) previous/next file, `/` search with `n`/`N`, `w` wrap file, `V` visual lines, `{n}G` go to line, drag the mouse to select text and `y` to copy it, `q` back to list, `R` reload PR |
 | Review | `c` comment (or reply on a thread), `e` edit your comment, `Enter` fold/unfold a thread, `Space s` submit review, `Space m` merge, `X` close PR |
 | Comment field | opens under the line in normal mode: `i` type, `Esc` back to normal mode (or cancel), `Enter` send |

@@ -31,6 +31,20 @@ enum Settings {
         set { s.copilotModel = newValue.trimmingCharacters(in: .whitespacesAndNewlines) }
     }
 
+    static var terminal: Terminal {
+        get { Terminal(rawValue: s.terminal) ?? .ghostty }
+        set { s.terminal = newValue.rawValue }
+    }
+    static var sourceDir: String {
+        get { s.sourceDir.isEmpty ? "~/source" : s.sourceDir }
+        set { s.sourceDir = newValue.trimmingCharacters(in: .whitespacesAndNewlines) }
+    }
+
+    static var account: String {
+        get { s.account }
+        set { s.account = newValue.trimmingCharacters(in: .whitespacesAndNewlines) }
+    }
+
     static func reset() {
         s = AppSettings()
         apply()

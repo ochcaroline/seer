@@ -12,6 +12,10 @@ final class SettingsWindow: NSPanel, NSTextFieldDelegate {
     private let reposText = NSTextView()
     private let reposStatus = NSTextField(labelWithString: "")
     private let copilotModel = NSTextField()
+    private let account = NSPopUpButton()
+    private let terminal = NSPopUpButton()
+    private let sourceDir = NSTextField()
+    private static let activeAccount = "gh active account"
     /// Called with the new config after the repo list is saved.
     var onReposSaved: ((Config) -> Void)?
 
@@ -36,6 +40,9 @@ final class SettingsWindow: NSPanel, NSTextFieldDelegate {
             [label("UI font size"), stepper(Binding(get: { Settings.uiFontSize }, set: { Settings.uiFontSize = $0 }), min: 8, max: 32, step: 1)],
             [label("Line spacing"), stepper(Binding(get: { Settings.lineSpacing }, set: { Settings.lineSpacing = $0 }), min: 0, max: 20, step: 1)],
             [label("Copilot model"), copilotModel],
+            [label("GitHub account"), account],
+            [label("Terminal"), terminal],
+            [label("Source directory"), sourceDir],
         ]
         let grid = NSGridView(views: rows)
         grid.rowSpacing = 14
@@ -56,6 +63,28 @@ final class SettingsWindow: NSPanel, NSTextFieldDelegate {
         copilotModel.placeholderString = "auto"
         copilotModel.delegate = self
         copilotModel.widthAnchor.constraint(equalToConstant: 220).isActive = true
+
+        account.addItem(withTitle: Self.activeAccount)
+        account.widthAnchor.constraint(equalToConstant: 220).isActive = true
+        account.target = self
+        account.action = #selector(accountChanged)
+        Task.detached {
+            let logins = GitHub.ghAccounts()
+            await MainActor.run { [weak self] in self?.setAccounts(logins) }
+        }
+
+        terminal.addItems(withTitles: Terminal.allCases.map(\.rawValue))
+        terminal.target = self
+        terminal.action = #selector(terminalChanged)
+        sourceDir.font = Theme.uiFont
+        sourceDir.textColor = Theme.text
+        sourceDir.backgroundColor = Theme.raised
+        sourceDir.drawsBackground = true
+        sourceDir.isBordered = false
+        sourceDir.focusRingType = .none
+        sourceDir.placeholderString = "~/source"
+        sourceDir.delegate = self
+        sourceDir.widthAnchor.constraint(equalToConstant: 220).isActive = true
 
         reposText.font = .monospacedSystemFont(ofSize: 13, weight: .regular)
         reposText.textColor = Theme.text
@@ -143,6 +172,32 @@ final class SettingsWindow: NSPanel, NSTextFieldDelegate {
             v.stringValue = "\(Int(key.get()))"
         }
         copilotModel.stringValue = Settings.copilotModel
+        selectAccount()
+        terminal.selectItem(withTitle: Settings.terminal.rawValue)
+        sourceDir.stringValue = Settings.sourceDir
+    }
+
+    private func setAccounts(_ logins: [String]) {
+        account.removeAllItems()
+        account.addItem(withTitle: Self.activeAccount)
+        account.addItems(withTitles: logins)
+        selectAccount()
+    }
+
+    /// A saved login gh no longer lists stays selectable so Save doesn't silently drop it.
+    private func selectAccount() {
+        let saved = Settings.account
+        if saved.isEmpty { return account.selectItem(at: 0) }
+        if account.item(withTitle: saved) == nil { account.addItem(withTitle: saved) }
+        account.selectItem(withTitle: saved)
+    }
+
+    @objc private func terminalChanged() {
+        Settings.terminal = Terminal(rawValue: terminal.titleOfSelectedItem ?? "") ?? .ghostty
+    }
+
+    @objc private func accountChanged() {
+        Settings.account = account.indexOfSelectedItem == 0 ? "" : account.titleOfSelectedItem ?? ""
     }
 
     @objc private func fontChanged() {
@@ -156,13 +211,16 @@ final class SettingsWindow: NSPanel, NSTextFieldDelegate {
     }
 
     func controlTextDidEndEditing(_ notification: Notification) {
-        guard notification.object as AnyObject? === copilotModel else { return }
-        Settings.copilotModel = copilotModel.stringValue
+        let field = notification.object as AnyObject?
+        if field === copilotModel { Settings.copilotModel = copilotModel.stringValue }
+        else if field === sourceDir { Settings.sourceDir = sourceDir.stringValue }
+        else { return }
         sync()
     }
 
     @objc private func saveSettings() {
         Settings.copilotModel = copilotModel.stringValue
+        Settings.sourceDir = sourceDir.stringValue
         sync()
         let entries = reposText.string.split(whereSeparator: \.isNewline)
             .map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
@@ -180,7 +238,7 @@ final class SettingsWindow: NSPanel, NSTextFieldDelegate {
     @objc private func resetAll() {
         let alert = NSAlert()
         alert.messageText = "Reset settings to defaults?"
-        alert.informativeText = "Font, sizes, spacing and Copilot model go back to defaults. Repositories are kept. Press Save settings to write the defaults to the config file."
+        alert.informativeText = "Font, sizes, spacing and Copilot model, GitHub account, terminal and source directory go back to defaults. Repositories are kept. Press Save settings to write the defaults to the config file."
         alert.addButton(withTitle: "Reset")
         alert.addButton(withTitle: "Cancel")
         alert.beginSheetModal(for: self) { [self] response in
